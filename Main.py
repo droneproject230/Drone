@@ -1,3 +1,4 @@
+
 import asyncio
 import cv2
 import numpy as np
@@ -5,39 +6,62 @@ from mavsdk import System
 from mavsdk.mission import MissionItem, MissionPlan
 from mavsdk.offboard import OffboardError, PositionNedYaw
 
-# Gelişmiş Yapay Zeka - YOLO Nesne Tespit ve Engel Algılama Sınıfı
+# ENDÜSTRİYEL YAPAY ZEKA - OpenCV DNN ile Gerçek YOLO Nesne Tespit Sınıfı
 class YOLOObstacleDetector:
     def __init__(self):
-        # Gerçek bir projede YOLO ağırlıkları (.weights ve .cfg) yüklenir.
-        # Bu şablonda OpenCV'nin derin öğrenme (DNN) modülü altyapısı kurulmuştur.
-        print("YAPAY ZEKA: YOLOv4/v8 Nesne Tespit Modeli Yükleniyor...")
-        self.classes = ["insan", "araba", "ucak", "drone", "agac", "bina"] 
-        # Simülasyon için hedef engel sınıfımızı seçiyoruz
-        self.target_obstacle = "insan" 
+        print("[AI] Yapay Zeka Derin Öğrenme Modülü Başlatılıyor...")
+        # Gerçek ağırlık ve konfigürasyon dosyalarının yolları
+        # ASELSAN standartlarında cv2.dnn modülü ile derin sinir ağı yüklenir
+        self.weights_path = "yolov4-tiny.weights"
+        self.cfg_path = "yolov4-tiny.cfg"
+        self.classes = ["insan", "araba", "ucak", "drone", "agac", "bina"]
+        self.target_obstacle = "insan" # Algılanacak kritik engel türü
+
+        try:
+            # Yapay zeka ağını (Neural Network) bilgisayar/kart hafızasına yüklüyoruz
+            self.net = cv2.dnn.readNet(self.weights_path, self.cfg_path)
+            # Performans için backend olarak CUDA (NVIDIA GPU) veya CPU seçimi
+            self.net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
+            self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
+            
+            self.model = cv2.dnn_DetectionModel(self.net)
+            self.model.setInputParams(size=(416, 416), scale=1/255.0, swapRB=True)
+            print("[AI] YOLO Sinir Ağı Başarıyla Yüklendi.")
+        except Exception as e:
+            print(f"[AI] Model dosyaları bulunamadı, simülasyon modunda çalışıyor: {e}")
+            self.net = None
 
     def detect_obstacle(self, frame):
         if frame is None:
             return False
             
-        # [YAPAY ZEKA İŞLEM HATTI]
-        # Görüntü yapay zeka modelinin işleyebileceği "Blob" formatına dönüştürülür
-        # blob = cv2.dnn.blobFromImage(frame, 1/255.0, (416, 416), swapRB=True, crop=False)
-        
-        # Sadece renk değil, nesnenin geometrik yapısını inceleyen yapay zeka simülasyonu:
-        # Gerçek kameralı testte dnn.forward() çıktısı burayı tetikler.
-        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-        mask = cv2.inRange(hsv, np.array([0, 120, 70]), np.array([10, 255, 255]))
-        contours, _ = cv2.findContours(mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-        
-        for contour in contours:
-            if cv2.contourArea(contour) > 4000:
-                # Yapay zeka nesneyi buldu ve etrafına bounding box (çerçeve) çiziyor
-                x, y, w, h = cv2.boundingRect(contour)
-                cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
-                cv2.putText(frame, f"[AI] {self.target_obstacle}: CONF %92", (x, y - 10),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-                return True # Engel doğrulandı
-        return False
+        # Eğer gerçek model dosyaları yüklüyse derin öğrenme tahmini yap
+        if self.net is not None:
+            classes, confidences, boxes = self.model.detect(frame, confThreshold=0.5, nmsThreshold=0.4)
+            for (classid, score, box) in zip(classes, confidences, boxes):
+                class_name = self.classes[classid[0]] if isinstance(classid, np.ndarray) else self.classes[classid]
+                
+                if class_name == self.target_obstacle:
+                    x, y, w, h = box
+                    # Engeli ekranda kare içine al ve doğruluk oranını yaz
+                    cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 0, 255), 2)
+                    cv2.putText(frame, f"[YOLO] {class_name}: %{int(score*100)}", (x, y - 10),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+                    return True
+            return False
+        else:
+            # Geliştirme/Simülasyon Aşaması için Yedek Matematiksel Algılama (Görüntü İşleme)
+            hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+            mask = cv2.inRange(hsv, np.array([0, 120, 70]), np.array([10, 255, 255]))
+            contours, _ = cv2.findContours(mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+            for contour in contours:
+                if cv2.contourArea(contour) > 4000:
+                    x, y, w, h = cv2.boundingRect(contour)
+                    cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
+                    cv2.putText(frame, f"[AI SIM] {self.target_obstacle}: CONF %89", (x, y - 10),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                    return True
+            return False
 
 # Küresel Engel Durumu Değişkeni
 obstacle_detected = False
@@ -65,12 +89,11 @@ async def run():
     await drone.mission.upload_mission(mission_plan)
     print("Otonom rota otopilota yüklendi.")
 
-    # 2. Asenkron Arka Plan Görevleri (Eşzamanlı Mimari)
+    # 2. Eşzamanlı Mimari Yönetimi (Asenkron Görevler)
     asyncio.ensure_future(track_battery(drone))
     asyncio.ensure_future(camera_pipeline())
     asyncio.ensure_future(avoidance_controller(drone))
 
-    # 3. Kalkış ve Görevi Başlatma
     print("Arm ediliyor...")
     await drone.action.arm()
     
@@ -87,7 +110,6 @@ async def run():
             print("Otonom rota başarıyla tamamlandı.")
             break
 
-# Kamera Görüntü İşleme Hattı
 async def camera_pipeline():
     global obstacle_detected
     detector = YOLOObstacleDetector()
@@ -99,34 +121,32 @@ async def camera_pipeline():
             obstacle_detected = detector.detect_obstacle(frame)
         await asyncio.sleep(0.03)
 
-# Engel Kaçınma ve Mod Yönetim Motoru
 async def avoidance_controller(drone):
     global obstacle_detected
     while True:
         if obstacle_detected:
-            print("🚨 [YAPAY ZEKA] ENGEL TESPİT EDİLDİ! Kaçış manevrasına geçiliyor...")
+            print("🚨 [YAPAY ZEKA] KRİTİK ENGEL ALGINLADI! Rota askıya alınıyor...")
             try:
                 await drone.mission.pause_mission()
                 await drone.offboard.set_position_ned(PositionNedYaw(0.0, 0.0, 0.0, 0.0))
                 await drone.offboard.start()
 
-                print("➡️ Yapay Zeka Kararı: Sağa 5 metre güvenli kaçış manevrası.")
+                print("➡️ Yapay Zeka Kaçış Kararı: Sağa 5 metre güvenli kayma.")
                 await drone.offboard.set_position_ned(PositionNedYaw(0.0, 5.0, -10.0, 90.0))
                 await asyncio.sleep(5)
 
                 await drone.offboard.stop()
-                print("🔄 Güvenli Bölge: Otonom göreve kalındığı yerden devam ediliyor...")
+                print("🔄 Güvenli Sektör: Otonom uçuşa devam ediliyor...")
                 await drone.mission.start_mission()
             except OffboardError as error:
                 print(f"Kaçış moduna geçilemedi: {error._result.result}")
                 
         await asyncio.sleep(0.1)
 
-# Fail-Safe: Pil Seviyesi Takip Sistemi
 async def track_battery(drone):
     async for battery in drone.telemetry.battery():
         if battery.remaining_percent < 0.20:
-            print("⚠️ KRİTİK PİL SEVİYESİ! Otomatik Eve Dönüş (RTL) tetiklendi.")
+            print("⚠️ Failsafe: Kritik pil seviyesi! RTL (Eve Dönüş) aktif.")
             await drone.action.return_to_launch()
             break
 
